@@ -106,7 +106,7 @@ public final class WatchChallenge {
                         .addAction(passWear)
                         .setContentIntentAvailableOffline(true)
                         .setHintContentIntentLaunchesActivity(true));
-        c.getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, b.build());
+        if (!NotificationDoctor.post(c, NOTIFICATION_ID, b.build())) return -1;
         return nonce;
     }
 
@@ -129,8 +129,7 @@ public final class WatchChallenge {
                 .setDefaults(Notification.DEFAULT_VIBRATE)
                 .setAutoCancel(true)
                 .build();
-        c.getSystemService(NotificationManager.class).notify(PLAIN_TEST_ID, n);
-        return true;
+        return NotificationDoctor.post(c, PLAIN_TEST_ID, n);
     }
 
     public static void cancel(Context c) {

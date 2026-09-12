@@ -38,6 +38,9 @@ public class MainActivity extends Activity {
 
     enum Screen { HOME, GEAR, CHUTE, BOARD, LIVE, LOGBOOK, SETTINGS }
 
+    /** Shown on the home screen so the installed build is never in doubt. */
+    static final String VERSION = "v2.4 (build 6)";
+
     static final String[] GEAR_ITEMS = {
             "AAD is ON and showing the expected status",
             "Gear inspection complete (3-ring, closing loop, pin, handles)",
@@ -63,6 +66,7 @@ public class MainActivity extends Activity {
     private TextView liveAgl, livePhasePill, liveTimer, liveVs, liveBaseline, liveConf, liveCalib;
     private LinearLayout liveHero, liveDots, liveDotsHost, liveCalibBar, liveCalibHost;
     private View liveCalibFill, liveCalibRest;
+    private LinearLayout rawHz, rawNow, rawBase, rawDelta, rawAgl;
     private Ui.Tile tMsl, tGps, tPress, tMax, tSpeed, tNext;
     private Button btnRezero, btnMark;
     private int heroTint = 0;
@@ -211,6 +215,11 @@ public class MainActivity extends Activity {
         LinearLayout safety = ui.card(); safety.addView(ui.label("Instrument status"));
         safety.addView(ui.helper("Certified altimeter, audible/AAD and drop-zone procedures remain primary. This app is a recording and awareness companion; a phone barometer is not a certified altimeter."));
         content.addView(safety);
+
+        TextView ver = ui.helper("SkyDive Companion " + VERSION);
+        ver.setPadding(ui.dp(4), 0, ui.dp(4), 0);
+        ver.setGravity(Gravity.CENTER_HORIZONTAL);
+        content.addView(ver);
     }
 
     /** Shows the last crash or failed start, with a one-tap way to send it. */
@@ -314,6 +323,9 @@ public class MainActivity extends Activity {
         w.addView(plain);
         LinearLayout nr = ui.row(); watchNotif = ui.helper(""); nr.addView(watchNotif, new LinearLayout.LayoutParams(0, Ui.WRAP, 1f));
         watchFix = ui.ghost("FIX"); watchFix.setLayoutParams(new LinearLayout.LayoutParams(Ui.WRAP, Ui.WRAP)); watchFix.setOnClickListener(v -> openNotificationSettings()); nr.addView(watchFix); w.addView(nr);
+        Button diag = ui.ghost("Notification diagnostics");
+        diag.setGravity(Gravity.START | Gravity.CENTER_VERTICAL); diag.setLayoutParams(ui.block(0));
+        diag.setOnClickListener(v -> showDiagnosticsDialog()); w.addView(diag);
         Button guide = ui.ghost("Watch not showing it?  Open the guide"); guide.setGravity(Gravity.START | Gravity.CENTER_VERTICAL); guide.setLayoutParams(ui.block(0)); guide.setOnClickListener(v -> showGuideDialog()); w.addView(guide);
         content.addView(w);
 
@@ -343,11 +355,11 @@ public class MainActivity extends Activity {
         } else if (fresh) {
             ui.setPill(watchPill, WatchChallenge.verifiedLabel(this), Ui.GREEN);
             watchHelp.setText("The watch acknowledged the challenge. Verification stays valid for 6 hours.");
-            watchSend.setText("SEND AGAIN"); Ui.enable(watchSend, reason == null);
+            watchSend.setText("SEND AGAIN"); Ui.enable(watchSend, true);
         } else {
             ui.setPill(watchPill, "NOT VERIFIED", Ui.RED);
             watchHelp.setText("Send a challenge, then look at the watch and tap WATCH CHECK PASSED.");
-            watchSend.setText("SEND WATCH CHALLENGE"); Ui.enable(watchSend, reason == null);
+            watchSend.setText("SEND WATCH CHALLENGE"); Ui.enable(watchSend, true);
         }
         watchNotif.setText(reason == null ? "Notifications: ✓ allowed (Watch checks · High)" : "Notifications: ✗ " + reason);
         watchNotif.setTextColor(reason == null ? Ui.MUTED : Ui.RED);
@@ -358,10 +370,45 @@ public class MainActivity extends Activity {
 
     private void sendChallenge() {
         String reason = WatchChallenge.blockedReason(this);
-        if (reason != null) { Toast.makeText(this, reason, Toast.LENGTH_LONG).show(); openNotificationSettings(); return; }
+        if (reason != null) {
+            new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setTitle("The phone is blocking this")
+                    .setMessage(reason + "\n\nNothing can reach the watch until the phone is allowed to post the notification.")
+                    .setPositiveButton("Open notification settings", (d, w) -> openNotificationSettings())
+                    .setNeutralButton("Diagnostics", (d, w) -> showDiagnosticsDialog())
+                    .setNegativeButton("Cancel", null).show();
+            updateWatchCard();
+            return;
+        }
         long nonce = WatchChallenge.send(this);
-        if (nonce > 0) Toast.makeText(this, "Challenge sent. Check the watch. Lock the phone if it doesn't show within a few seconds.", Toast.LENGTH_LONG).show();
+        if (nonce > 0) {
+            boolean posted = NotificationDoctor.isPosted(this, WatchChallenge.NOTIFICATION_ID);
+            Toast.makeText(this, posted
+                    ? "Posted on the phone. Check the watch; lock the phone if it does not appear."
+                    : "Sent, but the phone is not holding the notification. Open diagnostics.", Toast.LENGTH_LONG).show();
+        } else {
+            new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setTitle("The notification did not post")
+                    .setMessage(NotificationDoctor.report(this))
+                    .setPositiveButton("Open notification settings", (d, w) -> openNotificationSettings())
+                    .setNegativeButton("Close", null).show();
+        }
         updateWatchCard();
+    }
+
+    private void showDiagnosticsDialog() {
+        final String text = NotificationDoctor.report(this);
+        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Notification diagnostics")
+                .setMessage(text)
+                .setPositiveButton("Send to developer", (d, w) -> {
+                    Intent i = new Intent(Intent.ACTION_SEND).setType("text/plain")
+                            .putExtra(Intent.EXTRA_SUBJECT, "SkyDive Companion notification diagnostics")
+                            .putExtra(Intent.EXTRA_TEXT, text);
+                    startActivity(Intent.createChooser(i, "Send diagnostics"));
+                })
+                .setNeutralButton("Notification settings", (d, w) -> openNotificationSettings())
+                .setNegativeButton("Close", null).show();
     }
     private void openNotificationSettings() {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -470,6 +517,15 @@ public class MainActivity extends Activity {
                 .setNegativeButton("Keep tracking", null).show());
         content.addView(stop);
 
+        LinearLayout sens = ui.card(); sens.addView(ui.label("Barometer (raw)"));
+        rawHz = ui.kv("Sample rate", "\u2014", Ui.TEXT); sens.addView(rawHz);
+        rawNow = ui.kv("Pressure now", "\u2014", Ui.TEXT); sens.addView(rawNow);
+        rawBase = ui.kv("Ground baseline", "\u2014", Ui.TEXT); sens.addView(rawBase);
+        rawDelta = ui.kv("Change from baseline", "\u2014", Ui.TEXT); sens.addView(rawDelta);
+        rawAgl = ui.kv("= height", "\u2014", Ui.ACCENT); sens.addView(rawAgl);
+        sens.addView(ui.helper("1 hPa is about 27 ft. Lifting the phone by 3 ft should move the change by roughly 0.11 hPa; if it moves much more than that, the sensor reading itself is wrong, not the maths."));
+        content.addView(sens);
+
         LinearLayout how = ui.card(); how.addView(ui.label("How altitude is computed"));
         TextView howT = ui.helper("Pressure is spike-filtered, converted with the ISA hypsometric formula, then smoothed by a two-state Kalman filter that also produces the vertical rate. AGL is measured against a median ground baseline taken over 8 s; while you are still on the ground it slowly tracks weather drift. Ground temperature scales the result (a pressure altimeter reads low on a hot day). MSL = DZ elevation + AGL. GPS altitude is shown for cross-checking and feeds the confidence dots; it is never blended into AGL.");
         howT.setVisibility(View.GONE); how.addView(howT);
@@ -521,8 +577,21 @@ public class MainActivity extends Activity {
         int next = b.getInt("nextCallout", -1); tNext.value.setText(next > 0 ? Ui.ft(next) : "—");
         tNext.sub.setText(next > 0 ? "ft (freefall/canopy)" : "callouts done");
 
+        double hz = b.getDouble("hz"), dHpa = b.getDouble("deltaHpa");
+        setKv(rawHz, Double.isNaN(hz) || hz <= 0 ? "\u2014" : String.format(Locale.US, "%.0f Hz", hz));
+        setKv(rawNow, Double.isNaN(b.getDouble("raw")) ? "\u2014" : String.format(Locale.US, "%.3f hPa", b.getDouble("raw")));
+        setKv(rawBase, Double.isNaN(b.getDouble("baseline")) ? "\u2014" : String.format(Locale.US, "%.3f hPa", b.getDouble("baseline")));
+        setKv(rawDelta, Double.isNaN(dHpa) ? "\u2014" : String.format(Locale.US, "%+.3f hPa", dHpa));
+        setKv(rawAgl, ready ? Ui.ft(agl) + " ft" : "\u2014");
+
         Ui.enable(btnRezero, ready && "GROUND".equals(phase));
         Ui.enable(btnMark, "AIRCRAFT".equals(phase));
+    }
+
+    private static void setKv(LinearLayout row, String value) {
+        if (row == null) return;
+        Object t = row.getTag();
+        if (t instanceof TextView) ((TextView) t).setText(value);
     }
 
     // ------------------------------------------------------------------ logbook
@@ -609,6 +678,8 @@ public class MainActivity extends Activity {
             else openNotificationSettings();
         });
         w.addView(pt);
+        Button nd = ui.secondary("NOTIFICATION DIAGNOSTICS"); nd.setLayoutParams(ui.block(0));
+        nd.setOnClickListener(v -> showDiagnosticsDialog()); w.addView(nd);
         content.addView(w);
 
         Button save = ui.primary("SAVE");

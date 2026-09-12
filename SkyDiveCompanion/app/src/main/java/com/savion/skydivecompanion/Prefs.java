@@ -20,6 +20,7 @@ public final class Prefs {
     public static final String WATCH_NONCE = "watch_nonce";
     public static final String WATCH_EXPIRES_AT = "watch_expires_at";
     public static final String WATCH_LAST_SENT = "watch_last_sent";
+    public static final String LAST_NOTIFY_ERROR = "last_notify_error";
 
     public static final String DEFAULT_CALLOUTS = "10000,9000,8000,7000,6000,5000,4000,3000,2000,1500,1000,500";
     public static final long WATCH_FRESH_MS = 6L * 60 * 60 * 1000;      // 6 h

@@ -212,6 +212,60 @@ public class AppFlowTest {
         assertTrue("continue should unlock after the ack", findText(root, "I'M READY").isEnabled());
     }
 
+    /**
+     * Samsung batches barometer events: a burst arrives microseconds apart in wall
+     * time although it spans a second of real time. Deriving dt from wall time
+     * inflates the vertical rate, which is what drives phase detection.
+     */
+    @Test public void batchedSensorEventsDoNotInflateTheVerticalRate() {
+        Prefs.putBool(app, Prefs.USE_WATCH, false);
+        View root = runPreflight();
+        click(root, "I'M READY");
+        click(root, "START GROUND TRACKING");
+        ServiceController<DiveService> sc = startService();
+
+        // 12 s of calibration at a steady pressure, delivered in bursts of 10.
+        SensorEvent ev = ShadowSensorManager.createSensorEvent(1, Sensor.TYPE_PRESSURE);
+        Random rnd = new Random(11);
+        long sensorNs = 1_000_000_000L;
+        double trueDt = 0.02;
+        for (int i = 0; i < 1200; i++) {
+            ev.values[0] = (float) (1005.0 + rnd.nextGaussian() * 0.02);
+            sensorNs += (long) (trueDt * 1e9);
+            ev.timestamp = sensorNs;
+            ssm.sendSensorEventToListeners(ev);
+            // wall clock only advances once per burst of 10
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(i % 10 == 9 ? 200 : 0));
+        }
+        assertNotNull(DiveService.lastStatus);
+        assertTrue("baseline should be ready", DiveService.lastStatus.getBoolean("ready"));
+        double fpm = DiveService.lastStatus.getDouble("fpm");
+        assertTrue("a motionless phone must not report a large climb rate, got " + fpm, Math.abs(fpm) < 300);
+        assertTrue("sample rate should be measured", DiveService.lastStatus.getDouble("hz") > 0);
+        sc.destroy();
+    }
+
+    @Test public void sendButtonStaysTappableWhenNotificationsAreBlocked() {
+        shadowOf(app).denyPermissions(Manifest.permission.POST_NOTIFICATIONS);
+        Prefs.putBool(app, Prefs.USE_WATCH, true);
+        View root = runPreflight();
+        TextView send = findText(root, "SEND WATCH CHALLENGE");
+        assertNotNull(send);
+        assertTrue("the button must stay tappable so the user gets an explanation", send.isEnabled());
+        assertNotNull("the blocked reason must be on screen", findText(root, "Notifications:"));
+    }
+
+    @Test public void diagnosticsReportNamesEveryGate() {
+        String r = NotificationDoctor.report(app);
+        for (String needle : new String[]{"POST_NOTIFICATIONS permission", "Notifications enabled for app",
+                "Watch checks channel", "Do Not Disturb", "Challenge currently posted", "Last notify() error"}) {
+            assertTrue("diagnostics missing: " + needle, r.contains(needle));
+        }
+        WatchChallenge.send(app);
+        assertTrue("posted challenge should be detected",
+                NotificationDoctor.isPosted(app, WatchChallenge.NOTIFICATION_ID));
+    }
+
     @Test public void crashReportSurfacesOnHome() {
         CrashReporter.note(app, new IllegalStateException("synthetic"), "unit test");
         MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();

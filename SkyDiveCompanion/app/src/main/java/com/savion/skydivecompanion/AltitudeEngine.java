@@ -281,7 +281,9 @@ public final class AltitudeEngine {
             if (Math.abs(aglFt) < 3) aglFt = 0;          // dead-band on the ground
             if (aglFt < 0 && groundMode) aglFt = 0;
             e.aglFt = aglFt;
-            e.verticalSpeedFpm = metresToFeet(v * k) * 60.0;
+            double fpm = metresToFeet(v * k) * 60.0;
+            if (fpm > 25000) fpm = 25000; else if (fpm < -25000) fpm = -25000;
+            e.verticalSpeedFpm = fpm;
             e.baselineHpa = metresToPressure(hGround, ISA_P0_HPA);
             e.baselineAgeSec = baselineNs > 0 ? (nowNs - baselineNs) / 1e9 : Double.NaN;
             e.noiseFt = Double.isNaN(noiseM) ? Double.NaN : metresToFeet(noiseM);

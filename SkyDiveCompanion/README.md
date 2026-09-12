@@ -1,4 +1,4 @@
-# SkyDive Companion v2.3
+# SkyDive Companion v2.4
 
 Phone-first skydiving companion for Android (Galaxy S23 Ultra in a pocket,
 Galaxy Watch 8 as an optional verification surface). Zero dependencies:
@@ -53,6 +53,18 @@ java -cp /tmp/out com.savion.skydivecompanion.AltitudeEngineTest
 
 ## Altitude limitation
 A phone barometer is not a certified skydiving altimeter. Weather changes, HVAC, a hand over the sensor port, wind and sensor noise all affect it. The certified altimeter, audible, AAD and drop-zone procedures remain primary; this app is a recording and awareness companion.
+
+## v2.4 (second round of device reports: no notification, altitude jumps ~100 ft on a hand movement)
+
+**Sensor timing, again**
+- v2.3 fixed the calibration hang by timing samples with the system clock. That is the right epoch but the wrong *spacing*: Samsung batches barometer events, so a burst of samples arrives microseconds apart in wall time although it really spans a second. Deriving dt from wall time inflated the vertical-rate estimate, measured at 236 ft/min for a motionless phone against a true 133. The service now keeps one monotonic timeline anchored on the system clock and advanced by `SensorEvent.timestamp` *deltas*, which are accurate whatever their epoch, falling back to wall deltas when the sensor clock is unusable. Both failure modes are covered by tests.
+- Reported vertical speed is clamped to +/- 25,000 ft/min so a filter transient can never print a nonsense rate.
+
+**Making the two remaining faults visible instead of guessed at**
+- The altitude engine was benchmarked against a 1 m hand lift at 1, 2, 5, 10, 25 and 50 Hz and at three noise levels; it peaks at 4-5 ft every time and settles at 3 ft. The maths is not what produces 100 ft, so the Live screen now shows the **raw barometer**: sample rate, pressure now, ground baseline, change from baseline, and the resulting height. 1 hPa is about 27 ft, so a 3 ft lift should move the change by roughly 0.11 hPa. If it moves far more, the sensor reading itself is wrong rather than the conversion.
+- **Notification diagnostics** (watch card and Settings) reports what the platform itself says: permission state, whether notifications are enabled, the channel's importance, Do Not Disturb, whether the phone is currently *holding* the notification, and the last error `notify()` threw. If every gate is clear but the watch stays empty, the phone is posting correctly and the Galaxy Wearable bridge is the blocker. It can be shared as text in one tap.
+- The send button is never silently disabled any more. When something blocks it, tapping explains what, with a direct link to the setting.
+- The home screen shows the installed version, so which build is running is never in doubt.
 
 ## v2.3 fixes (reported from a real device)
 

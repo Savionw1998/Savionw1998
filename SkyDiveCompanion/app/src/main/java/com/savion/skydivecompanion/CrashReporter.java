@@ -41,7 +41,7 @@ public final class CrashReporter {
     private static void save(Context c, Throwable t, String note) {
         StringWriter sw = new StringWriter();
         PrintWriter pw = new PrintWriter(sw);
-        pw.println("SkyDive Companion 2.3 (versionCode 5)");
+        pw.println("SkyDive Companion 2.4 (versionCode 6)");
         pw.println("Device: " + Build.MANUFACTURER + " " + Build.MODEL + "  Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")");
         pw.println("When: " + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()));
         pw.println("Note: " + note);

@@ -106,6 +106,42 @@ public class DiveService extends Service implements SensorEventListener, Locatio
      */
     private static long nowNs() { return SystemClock.elapsedRealtimeNanos(); }
 
+    private long sensorClockNs = -1, lastSensorTs = -1, lastWallNs = -1;
+    private int sampleCount; private long rateWindowNs = -1; private double sampleHz;
+
+    /**
+     * One monotonic timeline with CORRECT spacing between samples.
+     *
+     * SensorEvent.timestamp is on an unspecified epoch (v2.2 mixed it with the
+     * system clock and calibration hung), but its deltas are accurate. Wall-clock
+     * time at delivery is on the right epoch but has the wrong spacing, because
+     * Samsung batches barometer events: a burst of samples arrives microseconds
+     * apart although it really spans a second. Feeding those deltas to the Kalman
+     * filter inflates the vertical-rate estimate.
+     *
+     * So: anchor on the wall clock, advance by sensor deltas, fall back to wall
+     * deltas whenever the sensor clock is unusable.
+     */
+    private long sensorClock(SensorEvent ev) {
+        long wall = nowNs();
+        if (sensorClockNs < 0) {
+            sensorClockNs = wall; lastSensorTs = ev.timestamp; lastWallNs = wall;
+            rateWindowNs = wall; sampleCount = 0;
+            return sensorClockNs;
+        }
+        long d = ev.timestamp - lastSensorTs;
+        if (d <= 0 || d > 2_000_000_000L) d = Math.max(0L, wall - lastWallNs);
+        if (d > 2_000_000_000L) d = 2_000_000_000L;
+        lastSensorTs = ev.timestamp; lastWallNs = wall;
+        sensorClockNs += d;
+        if (Math.abs(sensorClockNs - wall) > 30_000_000_000L) sensorClockNs = wall;  // runaway guard
+
+        sampleCount++;
+        long span = wall - rateWindowNs;
+        if (span > 2_000_000_000L) { sampleHz = sampleCount * 1e9 / span; sampleCount = 0; rateWindowNs = wall; }
+        return sensorClockNs;
+    }
+
     /**
      * Android 14+ kills the process if startForegroundService() is not followed by
      * startForeground(). A location-typed FGS additionally requires the location
@@ -177,6 +213,7 @@ public class DiveService extends Service implements SensorEventListener, Locatio
         if (hasBaro) {
             sensors.registerListener(this, baro, SensorManager.SENSOR_DELAY_FASTEST);
             engine.setCalibrationDurationMs(8000);
+            sensorClockNs = -1; lastSensorTs = -1; lastWallNs = -1; sampleHz = 0; sampleCount = 0;
             engine.startCalibration(nowNs());
         } else {
             alert("NO BAROMETER", "This phone has no pressure sensor. Only GPS altitude is available.", true);
@@ -225,7 +262,7 @@ public class DiveService extends Service implements SensorEventListener, Locatio
             return;
         }
         if (ev.sensor.getType() != Sensor.TYPE_PRESSURE) return;
-        long tNs = nowNs();
+        long tNs = sensorClock(ev);
         engine.addPressure(ev.values[0], tNs);
         AltitudeEngine.Estimate e = engine.snapshot(tNs);
         if (!e.baselineReady) return;
@@ -383,6 +420,8 @@ public class DiveService extends Service implements SensorEventListener, Locatio
         b.putBoolean("ready", e.baselineReady); b.putBoolean("calibrating", e.calibrating); b.putDouble("calibProg", e.calibrationProgress);
         b.putInt("conf", e.confidence); b.putBoolean("tempCorr", e.temperatureCorrected); b.putBoolean("hasBaro", hasBaro);
         b.putString("phase", sm.phase().name()); b.putString("timer", elapsed());
+        b.putDouble("hz", sampleHz);
+        b.putDouble("deltaHpa", (Double.isNaN(e.filteredHpa) || Double.isNaN(e.baselineHpa)) ? Double.NaN : e.filteredHpa - e.baselineHpa);
         b.putDouble("maxAgl", sm.maxAglFt); b.putInt("nextCallout", nextCallout(e.aglFt));
         b.putDouble("exitAgl", sm.exitAglFt); b.putDouble("openAgl", sm.openAglFt);
         lastStatus = b;
