@@ -53,3 +53,8 @@ java -cp /tmp/out com.savion.skydivecompanion.AltitudeEngineTest
 
 ## Altitude limitation
 A phone barometer is not a certified skydiving altimeter. Weather changes, HVAC, a hand over the sensor port, wind and sensor noise all affect it. The certified altimeter, audible, AAD and drop-zone procedures remain primary; this app is a recording and awareness companion.
+
+## Prebuilt APK
+`release/SkyDiveCompanion-v2.2-debug.apk` is a signed debug build (debug keystore, v2+v3 signatures, zipaligned). On the phone, open the file and allow installs from that app when asked. It will not install over a Play-signed or differently-signed build of the same package; uninstall v2.1 first if the installer refuses.
+
+`scripts/build-apk.sh` reproduces it without Android Studio using aapt2, D8 and uber-apk-signer downloaded as plain files.
