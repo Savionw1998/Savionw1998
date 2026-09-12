@@ -263,6 +263,14 @@ final class Ui {
         return r;
     }
 
+    /** Updates an existing progress bar in place instead of rebuilding it. */
+    static void setProgress(View fill, View rest, double fraction) {
+        float f = (float) Math.max(0.02, Math.min(1, fraction));
+        ((LinearLayout.LayoutParams) fill.getLayoutParams()).weight = f;
+        ((LinearLayout.LayoutParams) rest.getLayoutParams()).weight = 1f - f;
+        fill.requestLayout(); rest.requestLayout();
+    }
+
     LinearLayout progress(double fraction, int color) {
         LinearLayout outer = new LinearLayout(c); outer.setBackground(shape(CARD2, 999, 0));
         outer.setLayoutParams(block(0));

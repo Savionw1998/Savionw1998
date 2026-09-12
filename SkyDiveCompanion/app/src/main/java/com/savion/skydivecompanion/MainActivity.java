@@ -62,6 +62,7 @@ public class MainActivity extends Activity {
     // live widgets
     private TextView liveAgl, livePhasePill, liveTimer, liveVs, liveBaseline, liveConf, liveCalib;
     private LinearLayout liveHero, liveDots, liveDotsHost, liveCalibBar, liveCalibHost;
+    private View liveCalibFill, liveCalibRest;
     private Ui.Tile tMsl, tGps, tPress, tMax, tSpeed, tNext;
     private Button btnRezero, btnMark;
     private int heroTint = 0;
@@ -171,6 +172,7 @@ public class MainActivity extends Activity {
     private void showHome() {
         begin(Screen.HOME, 0, null, "Ready for the next jump", "One button. The phone stays pocketed while voice alerts and notifications do the work.");
         boolean live = DiveService.running;
+        addDiagnosticsCard();
 
         LinearLayout c = ui.card(); c.addView(ui.label("Session"));
         LinearLayout r = ui.row(); r.addView(ui.pill(live ? "TRACKING" : "STANDBY", live ? Ui.GREEN : Ui.MUTED)); c.addView(r);
@@ -209,6 +211,54 @@ public class MainActivity extends Activity {
         LinearLayout safety = ui.card(); safety.addView(ui.label("Instrument status"));
         safety.addView(ui.helper("Certified altimeter, audible/AAD and drop-zone procedures remain primary. This app is a recording and awareness companion; a phone barometer is not a certified altimeter."));
         content.addView(safety);
+    }
+
+    /** Shows the last crash or failed start, with a one-tap way to send it. */
+    private void addDiagnosticsCard() {
+        if (!CrashReporter.has(this) && !DiveService.startFailed) return;
+        LinearLayout c = ui.card();
+        c.setBackground(ui.shape(Ui.alpha(Ui.RED, 0x14), 18, Ui.alpha(Ui.RED, 0x88)));
+        TextView lab = ui.label("Problem report");
+        lab.setTextColor(Ui.RED);
+        c.addView(lab);
+        String when = CrashReporter.when(this) > 0
+                ? new java.text.SimpleDateFormat("MMM d, h:mm a", Locale.US).format(new java.util.Date(CrashReporter.when(this)))
+                : "just now";
+        c.addView(ui.body(DiveService.startFailed ? "Tracking could not start." : "The app stopped unexpectedly."));
+        TextView sub = ui.helper(when + " \u00b7 " + CrashReporter.note(this));
+        sub.setPadding(0, ui.dp(4), 0, 0);
+        c.addView(sub);
+
+        final TextView detail = ui.helper(CrashReporter.trace(this));
+        detail.setTextSize(10);
+        detail.setVisibility(View.GONE);
+        detail.setPadding(0, ui.dp(10), 0, 0);
+        detail.setTextIsSelectable(true);
+        c.addView(detail);
+
+        Button show = ui.ghost("Show details");
+        show.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        show.setLayoutParams(ui.block(0));
+        show.setOnClickListener(v -> {
+            boolean vis = detail.getVisibility() == View.VISIBLE;
+            detail.setVisibility(vis ? View.GONE : View.VISIBLE);
+            show.setText(vis ? "Show details" : "Hide details");
+        });
+        c.addView(show);
+
+        Button send = ui.secondary("SEND REPORT");
+        send.setOnClickListener(v -> {
+            Intent i = new Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_SUBJECT, "SkyDive Companion problem report")
+                    .putExtra(Intent.EXTRA_TEXT, CrashReporter.trace(this));
+            startActivity(Intent.createChooser(i, "Send report"));
+        });
+        Button dismiss = ui.secondary("DISMISS");
+        dismiss.setOnClickListener(v -> { CrashReporter.clear(this); DiveService.startFailed = false; showHome(); });
+        LinearLayout pr = ui.pair(send, dismiss);
+        ((LinearLayout.LayoutParams) pr.getLayoutParams()).topMargin = ui.dp(8);
+        c.addView(pr);
+        content.addView(c);
     }
 
     // ------------------------------------------------------------------ checklists
@@ -255,6 +305,13 @@ public class MainActivity extends Activity {
         watchHelp = ui.helper(""); w.addView(watchHelp);
         watchSend = ui.secondary("SEND WATCH CHALLENGE"); ((LinearLayout.LayoutParams) watchSend.getLayoutParams()).topMargin = ui.dp(12);
         watchSend.setOnClickListener(v -> sendChallenge()); w.addView(watchSend);
+        Button plain = ui.secondary("SEND PLAIN TEST");
+        plain.setOnClickListener(v -> {
+            if (WatchChallenge.sendPlainTest(this))
+                Toast.makeText(this, "Plain notification sent. If this one does not reach the watch, the Galaxy Wearable bridge is off.", Toast.LENGTH_LONG).show();
+            else { Toast.makeText(this, "Notifications are blocked on the phone.", Toast.LENGTH_LONG).show(); openNotificationSettings(); }
+        });
+        w.addView(plain);
         LinearLayout nr = ui.row(); watchNotif = ui.helper(""); nr.addView(watchNotif, new LinearLayout.LayoutParams(0, Ui.WRAP, 1f));
         watchFix = ui.ghost("FIX"); watchFix.setLayoutParams(new LinearLayout.LayoutParams(Ui.WRAP, Ui.WRAP)); watchFix.setOnClickListener(v -> openNotificationSettings()); nr.addView(watchFix); w.addView(nr);
         Button guide = ui.ghost("Watch not showing it?  Open the guide"); guide.setGravity(Gravity.START | Gravity.CENTER_VERTICAL); guide.setLayoutParams(ui.block(0)); guide.setOnClickListener(v -> showGuideDialog()); w.addView(guide);
@@ -354,7 +411,21 @@ public class MainActivity extends Activity {
         start.setOnClickListener(v -> {
             Prefs.putDouble(this, Prefs.DZ_ELEV_FT, parse(fDz.edit.getText().toString()));
             Prefs.putDouble(this, Prefs.GROUND_TEMP_F, parse(fT.edit.getText().toString()));
-            DiveService.start(this); showLive();
+            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 46);
+                Toast.makeText(this, "Grant location, then tap Start again.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            CrashReporter.clear(this);
+            DiveService.startFailed = false;
+            try { DiveService.start(this); }
+            catch (Throwable t) {
+                CrashReporter.note(this, t, "startForegroundService");
+                Toast.makeText(this, "Could not start tracking. See the report on the home screen.", Toast.LENGTH_LONG).show();
+                showHome();
+                return;
+            }
+            showLive();
         });
         content.addView(start);
         Button back = ui.secondary("BACK"); back.setOnClickListener(v -> showChute()); content.addView(back);
@@ -374,6 +445,7 @@ public class MainActivity extends Activity {
         liveCalibHost = new LinearLayout(this); liveCalibHost.setOrientation(LinearLayout.VERTICAL); liveCalibHost.setPadding(0, ui.dp(12), 0, 0);
         liveCalib = ui.helper("Calibrating ground baseline… keep the phone still"); liveCalib.setTextColor(Ui.AMBER); liveCalibHost.addView(liveCalib);
         liveCalibBar = ui.progress(0, Ui.AMBER); ((LinearLayout.LayoutParams) liveCalibBar.getLayoutParams()).topMargin = ui.dp(6); liveCalibHost.addView(liveCalibBar);
+        liveCalibFill = liveCalibBar.getChildAt(0); liveCalibRest = liveCalibBar.getChildAt(1);
         liveHero.addView(liveCalibHost);
         LinearLayout confRow = ui.row(); confRow.setPadding(0, ui.dp(12), 0, 0);
         liveDotsHost = new LinearLayout(this); liveDotsHost.setOrientation(LinearLayout.HORIZONTAL); liveDots = ui.dots(0, Ui.GREEN); liveDotsHost.addView(liveDots);
@@ -429,7 +501,7 @@ public class MainActivity extends Activity {
         else if (calibrating || !ready) {
             liveCalibHost.setVisibility(View.VISIBLE); liveCalibBar.setVisibility(View.VISIBLE);
             double p = b.getDouble("calibProg"); liveCalib.setText(String.format(Locale.US, "Calibrating ground baseline %d%% — keep the phone still", (int) (p * 100)));
-            LinearLayout nb = ui.progress(p, Ui.AMBER); liveCalibHost.removeView(liveCalibBar); liveCalibBar = nb; ((LinearLayout.LayoutParams) liveCalibBar.getLayoutParams()).topMargin = ui.dp(6); liveCalibHost.addView(liveCalibBar);
+            Ui.setProgress(liveCalibFill, liveCalibRest, p);
         } else liveCalibHost.setVisibility(View.GONE);
 
         int conf = b.getInt("conf"); liveDotsHost.removeAllViews(); liveDots = ui.dots(conf, conf >= 3 ? Ui.GREEN : (conf == 2 ? Ui.AMBER : Ui.RED)); liveDotsHost.addView(liveDots);
@@ -530,7 +602,13 @@ public class MainActivity extends Activity {
         LinearLayout w = ui.card(); w.addView(ui.label("Galaxy Watch"));
         w.addView(ui.toggle("Use Galaxy Watch verification", Prefs.getBool(this, Prefs.USE_WATCH, true), (b, on) -> Prefs.putBool(this, Prefs.USE_WATCH, on)));
         Button ns = ui.secondary("OPEN NOTIFICATION SETTINGS"); ns.setOnClickListener(v -> openNotificationSettings()); w.addView(ns);
-        Button gd = ui.secondary("GALAXY WEARABLE GUIDE"); gd.setLayoutParams(ui.block(0)); gd.setOnClickListener(v -> showGuideDialog()); w.addView(gd);
+        Button gd = ui.secondary("GALAXY WEARABLE GUIDE"); gd.setOnClickListener(v -> showGuideDialog()); w.addView(gd);
+        Button pt = ui.secondary("SEND PLAIN TEST NOTIFICATION"); pt.setLayoutParams(ui.block(0));
+        pt.setOnClickListener(v -> {
+            if (WatchChallenge.sendPlainTest(this)) Toast.makeText(this, "Sent. Check the watch.", Toast.LENGTH_LONG).show();
+            else openNotificationSettings();
+        });
+        w.addView(pt);
         content.addView(w);
 
         Button save = ui.primary("SAVE");

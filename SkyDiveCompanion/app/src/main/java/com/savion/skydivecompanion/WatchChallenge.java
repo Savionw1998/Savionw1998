@@ -51,8 +51,8 @@ public final class WatchChallenge {
 
     /** @return the nonce of the challenge that was posted, or -1 when notifications are blocked. */
     public static long send(Context c) {
-        if (notificationsBlocked(c)) return -1;
         ensureChannel(c);
+        if (notificationsBlocked(c)) return -1;
         long nonce = System.currentTimeMillis();
         long expires = nonce + Prefs.WATCH_CHALLENGE_MS;
         Prefs.of(c).edit().putLong(Prefs.WATCH_NONCE, nonce).putLong(Prefs.WATCH_EXPIRES_AT, expires)
@@ -73,12 +73,16 @@ public final class WatchChallenge {
         Icon icon = Icon.createWithResource(c, R.drawable.ic_notification);
         Icon check = Icon.createWithResource(c, R.drawable.ic_check);
 
+        // The action must be a STANDARD action, not only a WearableExtender one.
+        // Samsung's One UI Watch bridge forwards the notification's own action list
+        // and drops extender-only actions, which is why v2.2 showed nothing tappable
+        // on the watch. It is added to the extender as well for stock Wear OS.
         Notification.Action pass = new Notification.Action.Builder(check, "WATCH CHECK PASSED", ackPi).build();
+        Notification.Action passWear = new Notification.Action.Builder(check, "WATCH CHECK PASSED", ackPi).build();
         Notification.Action help = new Notification.Action.Builder(icon, "NOT ON WATCH?", guidePi).build();
 
         String body = "Look at your Galaxy Watch and tap WATCH CHECK PASSED there. "
-                + "The button only exists on the watch. Challenge expires in "
-                + (Prefs.WATCH_CHALLENGE_MS / 1000) + " s.";
+                + "Challenge expires in " + (Prefs.WATCH_CHALLENGE_MS / 1000) + " s.";
 
         Notification.Builder b = new Notification.Builder(c, CHANNEL)
                 .setContentTitle("Watch check")
@@ -94,16 +98,39 @@ public final class WatchChallenge {
                 .setOnlyAlertOnce(false)
                 .setLocalOnly(false)
                 .setContentIntent(openPi)
-                .setTimeoutAfter(Prefs.WATCH_CHALLENGE_MS)
                 .setWhen(nonce)
                 .setShowWhen(true)
-                .addAction(help)   // phone-only action
+                .addAction(pass)
+                .addAction(help)
                 .extend(new Notification.WearableExtender()
-                        .addAction(pass)   // watch-only action
+                        .addAction(passWear)
                         .setContentIntentAvailableOffline(true)
                         .setHintContentIntentLaunchesActivity(true));
         c.getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, b.build());
         return nonce;
+    }
+
+    public static final int PLAIN_TEST_ID = 915;
+
+    /**
+     * Dead-simple notification with no actions and no extender. If this one does
+     * not reach the watch, the problem is Galaxy Wearable's notification settings
+     * rather than anything about the challenge itself.
+     */
+    public static boolean sendPlainTest(Context c) {
+        ensureChannel(c);
+        if (notificationsBlocked(c)) return false;
+        Notification n = new Notification.Builder(c, CHANNEL)
+                .setContentTitle("SkyDive Companion test")
+                .setContentText("If you can read this on your watch, bridging works.")
+                .setSmallIcon(Icon.createWithResource(c, R.drawable.ic_notification))
+                .setColor(0xFF4BB1FF)
+                .setPriority(Notification.PRIORITY_HIGH)
+                .setDefaults(Notification.DEFAULT_VIBRATE)
+                .setAutoCancel(true)
+                .build();
+        c.getSystemService(NotificationManager.class).notify(PLAIN_TEST_ID, n);
+        return true;
     }
 
     public static void cancel(Context c) {

@@ -1,4 +1,4 @@
-# SkyDive Companion v2.2
+# SkyDive Companion v2.3
 
 Phone-first skydiving companion for Android (Galaxy S23 Ultra in a pocket,
 Galaxy Watch 8 as an optional verification surface). Zero dependencies:
@@ -54,7 +54,26 @@ java -cp /tmp/out com.savion.skydivecompanion.AltitudeEngineTest
 ## Altitude limitation
 A phone barometer is not a certified skydiving altimeter. Weather changes, HVAC, a hand over the sensor port, wind and sensor noise all affect it. The certified altimeter, audible, AAD and drop-zone procedures remain primary; this app is a recording and awareness companion.
 
+## v2.3 fixes (reported from a real device)
+
+**Ground calibration hung or the app died when tracking started**
+- `SensorEvent.timestamp` is not `SystemClock.elapsedRealtime` on every device, and several Samsung barometers report a different clock entirely. v2.2 mixed the two, so the 8 s calibration window either never elapsed or elapsed instantly. Everything now runs on one clock. `harness/` has a regression test that fails on the old code and passes on the new.
+- Android 14+ kills the process when `startForegroundService()` is not followed by a successful `startForeground()`. A location-typed foreground service is rejected outright without the location runtime permission, and v2.2 swallowed that rejection. The service now falls back through `specialUse` and then the untyped form, so promotion always succeeds, and the Start button asks for location first instead of failing inside the service.
+- Sensor callbacks, text-to-speech, the wake lock and location updates can no longer take the app down; each failure is recorded instead.
+
+**The watch challenge never reached the watch**
+- The PASSED button was attached only to `Notification.WearableExtender`. Samsung's One UI Watch bridge forwards a notification's standard action list and drops extender-only actions, so nothing tappable arrived. The action is now a standard action *and* an extender copy for stock Wear OS.
+- `setTimeoutAfter` is gone; some bridges drop a notification that carries it before relaying.
+- New **SEND PLAIN TEST** button posts an action-free notification. If that does not reach the watch either, the problem is Galaxy Wearable's settings, not the app. The in-app guide now walks through them in order.
+
+**Crash reporting**
+- Any uncaught exception is captured and shown on the home screen next launch, with the full stack trace and a SEND REPORT button. No computer or cable needed to find out what went wrong.
+
 ## Prebuilt APK
-`release/SkyDiveCompanion-v2.2-debug.apk` is a signed debug build (debug keystore, v2+v3 signatures, zipaligned). On the phone, open the file and allow installs from that app when asked. It will not install over a Play-signed or differently-signed build of the same package; uninstall v2.1 first if the installer refuses.
+`release/SkyDiveCompanion-v2.3-debug.apk` is a signed debug build (debug keystore, v2+v3 signatures, zipaligned). On the phone, open the file and allow installs from that app when asked. It will not install over a Play-signed or differently-signed build of the same package; uninstall v2.1 first if the installer refuses.
 
 `scripts/build-apk.sh` reproduces it without Android Studio using aapt2, D8 and uber-apk-signer downloaded as plain files.
+
+## Tests
+- `app/src/test/.../AltitudeEngineTest.java` drives synthetic pressure traces through a full jump (plain `main`, no JUnit).
+- `harness/` runs the real Activity and Service in Robolectric's JVM Android runtime: pre-flight flow, calibration, the wrong-sensor-clock regression, watch challenge actions and the crash banner. See `harness/README.md`.

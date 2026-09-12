@@ -62,7 +62,10 @@ public class DiveService extends Service implements SensorEventListener, Locatio
     private TextToSpeech tts; private boolean ttsReady;
     private AudioManager audio; private PowerManager.WakeLock wake;
 
-    private boolean tracking, voice, duck, hasBaro;
+    private boolean tracking, voice, duck, hasBaro, locationAllowed;
+    /** ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE without requiring compile against API 34. */
+    private static final int SPECIAL_USE = 1 << 30;
+    public static volatile boolean startFailed = false;
     private long startedMs, lastVoiceMs, lastNoteMs, lastRecordMs, lastStatusMs;
     private String lastNoteText = "";
     private int[] callouts = new int[0]; private double hardDeckFt;
@@ -74,38 +77,79 @@ public class DiveService extends Service implements SensorEventListener, Locatio
     // ------------------------------------------------------------------ lifecycle
     @Override public int onStartCommand(Intent i, int flags, int startId) {
         String action = i == null ? ACTION_START : i.getAction();
-        createChannels();
+        try { createChannels(); } catch (Throwable t) { CrashReporter.note(this, t, "createChannels failed"); }
         // Every path through startForegroundService() must reach startForeground() promptly.
-        if (!promoteToForeground()) { stopSelf(); return START_NOT_STICKY; }
-        if (ACTION_STOP.equals(action)) { finishJump(true); return START_NOT_STICKY; }
-        if (ACTION_REZERO.equals(action)) { engine.rezero(SystemClock.elapsedRealtimeNanos()); alert("RE-ZEROED", "Ground baseline reset to current pressure.", true); return START_STICKY; }
-        if (ACTION_MARK_EXIT.equals(action)) { markExit(); return START_STICKY; }
-        startTracking();
+        if (!promoteToForeground()) {
+            startFailed = true;
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+        try {
+            if (ACTION_STOP.equals(action)) { finishJump(true); return START_NOT_STICKY; }
+            if (ACTION_REZERO.equals(action)) { engine.rezero(nowNs()); alert("RE-ZEROED", "Ground baseline reset to current pressure.", true); return START_STICKY; }
+            if (ACTION_MARK_EXIT.equals(action)) { markExit(); return START_STICKY; }
+            startTracking();
+        } catch (Throwable t) {
+            CrashReporter.note(this, t, "onStartCommand action=" + action);
+            startFailed = true;
+            alert("TRACKING FAILED TO START", "Open the app for the error detail.", false);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         return START_STICKY;
     }
 
+    /**
+     * One clock for everything. SensorEvent.timestamp is NOT elapsed-realtime on
+     * every device (notably several Samsung barometers), so mixing it with
+     * SystemClock made calibration either finish instantly or never finish.
+     */
+    private static long nowNs() { return SystemClock.elapsedRealtimeNanos(); }
+
+    /**
+     * Android 14+ kills the process if startForegroundService() is not followed by
+     * startForeground(). A location-typed FGS additionally requires the location
+     * runtime permission, so fall back through the types that are always available
+     * rather than letting the promotion fail.
+     */
     private boolean promoteToForeground() {
-        Notification n = statusNote(tracking ? lastNoteText : "Starting…");
-        try {
-            boolean loc = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
-            if (Build.VERSION.SDK_INT >= 34) {
-                if (!loc) throw new SecurityException("location permission required for a location foreground service");
-                startForeground(NOTE_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
-            } else if (Build.VERSION.SDK_INT >= 29) {
-                startForeground(NOTE_ID, n, loc ? ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION : 0);
-            } else {
-                startForeground(NOTE_ID, n);
+        Notification n;
+        try { n = statusNote(tracking ? lastNoteText : "Starting\u2026"); }
+        catch (Throwable t) { CrashReporter.note(this, t, "statusNote failed"); n = plainNote(); }
+
+        boolean loc = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+        locationAllowed = loc;
+
+        if (Build.VERSION.SDK_INT >= 29) {
+            int[] types = loc
+                    ? new int[]{ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION, SPECIAL_USE, 0}
+                    : new int[]{SPECIAL_USE, 0};
+            for (int type : types) {
+                try { startForeground(NOTE_ID, n, type); return true; }
+                catch (Throwable t) { CrashReporter.note(this, t, "startForeground type=" + type + " rejected"); }
             }
-            return true;
-        } catch (Exception e) {
-            alert("CANNOT START TRACKING", "Grant Location permission (needed for the tracking service on this Android version).", false);
+        }
+        try { startForeground(NOTE_ID, n); return true; }
+        catch (Throwable t) {
+            CrashReporter.note(this, t, "startForeground(untyped) rejected");
             return false;
         }
     }
 
+    /** Absolute minimum notification, used if building the normal one fails. */
+    private Notification plainNote() {
+        return new Notification.Builder(this, CH_STATUS)
+                .setContentTitle("SkyDive Companion")
+                .setContentText("Tracking")
+                .setSmallIcon(android.R.drawable.ic_menu_compass)
+                .setOngoing(true)
+                .build();
+    }
+
     private void startTracking() {
         if (tracking) return;
-        tracking = true; running = true;
+        tracking = true; running = true; startFailed = false;
         startedMs = System.currentTimeMillis();
         spoken.clear(); hardDeckSaid = false; calibratedAnnounced = false; track.clear();
 
@@ -120,9 +164,11 @@ public class DiveService extends Service implements SensorEventListener, Locatio
         if (Double.isNaN(tempF)) engine.clearGroundTemperature(); else engine.setGroundTemperatureC(AltitudeEngine.fahrenheitToCelsius(tempF));
         engine.setGroundMode(true);
 
-        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-        wake = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SkyDiveCompanion:track");
-        wake.acquire(4 * 60 * 60 * 1000L);
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            wake = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SkyDiveCompanion:track");
+            wake.acquire(4 * 60 * 60 * 1000L);
+        } catch (Throwable t) { CrashReporter.note(this, t, "wakelock"); }
 
         sensors = (SensorManager) getSystemService(SENSOR_SERVICE);
         baro = sensors.getDefaultSensor(Sensor.TYPE_PRESSURE);
@@ -131,18 +177,19 @@ public class DiveService extends Service implements SensorEventListener, Locatio
         if (hasBaro) {
             sensors.registerListener(this, baro, SensorManager.SENSOR_DELAY_FASTEST);
             engine.setCalibrationDurationMs(8000);
-            engine.startCalibration(SystemClock.elapsedRealtimeNanos());
+            engine.startCalibration(nowNs());
         } else {
             alert("NO BAROMETER", "This phone has no pressure sensor. Only GPS altitude is available.", true);
         }
         if (thermo != null) sensors.registerListener(this, thermo, SensorManager.SENSOR_DELAY_NORMAL);
 
         lm = (LocationManager) getSystemService(LOCATION_SERVICE);
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-            try { lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000, 0f, this, Looper.getMainLooper()); } catch (Exception ignored) {}
+        if (locationAllowed) {
+            try { lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000, 0f, this, Looper.getMainLooper()); }
+            catch (Exception e) { CrashReporter.note(this, e, "requestLocationUpdates"); }
         }
         audio = (AudioManager) getSystemService(AUDIO_SERVICE);
-        tts = new TextToSpeech(this, this);
+        try { tts = new TextToSpeech(this, this); } catch (Throwable t) { CrashReporter.note(this, t, "tts init"); }
 
         h.removeCallbacks(tick); h.post(tick);
         updateStatusNote("GROUND • calibrating");
@@ -151,19 +198,26 @@ public class DiveService extends Service implements SensorEventListener, Locatio
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             if (!tracking) return;
-            long nowNs = SystemClock.elapsedRealtimeNanos();
-            AltitudeEngine.Estimate e = engine.snapshot(nowNs);
+            long nowNs = nowNs();
+            AltitudeEngine.Estimate e;
+            try { e = engine.snapshot(nowNs); }
+            catch (Throwable t) { CrashReporter.note(DiveService.this, t, "snapshot"); h.postDelayed(this, 500); return; }
             if (e.baselineReady && !calibratedAnnounced) {
                 calibratedAnnounced = true;
                 alert("CALIBRATED", String.format(Locale.US, "Ground baseline %.1f hPa, sensor noise ±%.0f ft. AGL zeroed.", e.baselineHpa, Math.max(1, e.noiseFt)), true);
             }
-            broadcast(e);
+            try { broadcast(e); } catch (Throwable t) { CrashReporter.note(DiveService.this, t, "broadcast"); }
             h.postDelayed(this, 250);
         }
     };
 
     // ------------------------------------------------------------------ sensors
     @Override public void onSensorChanged(SensorEvent ev) {
+        try { handleSensor(ev); }
+        catch (Throwable t) { CrashReporter.note(this, t, "onSensorChanged"); }
+    }
+
+    private void handleSensor(SensorEvent ev) {
         if (!tracking) return;
         if (ev.sensor.getType() == Sensor.TYPE_AMBIENT_TEMPERATURE) {
             if (Double.isNaN(Prefs.getDouble(this, Prefs.GROUND_TEMP_F, Double.NaN)) && sm.phase() == JumpStateMachine.Phase.GROUND)
@@ -171,8 +225,9 @@ public class DiveService extends Service implements SensorEventListener, Locatio
             return;
         }
         if (ev.sensor.getType() != Sensor.TYPE_PRESSURE) return;
-        engine.addPressure(ev.values[0], ev.timestamp);
-        AltitudeEngine.Estimate e = engine.snapshot(ev.timestamp);
+        long tNs = nowNs();
+        engine.addPressure(ev.values[0], tNs);
+        AltitudeEngine.Estimate e = engine.snapshot(tNs);
         if (!e.baselineReady) return;
 
         long nowMs = System.currentTimeMillis();
@@ -212,7 +267,7 @@ public class DiveService extends Service implements SensorEventListener, Locatio
     }
 
     private void markExit() {
-        AltitudeEngine.Estimate e = engine.snapshot(SystemClock.elapsedRealtimeNanos());
+        AltitudeEngine.Estimate e = engine.snapshot(nowNs());
         JumpStateMachine.Phase tr = sm.forceFreefall(e.aglFt, System.currentTimeMillis());
         if (tr != null) { engine.setGroundMode(false); alert("EXIT MARKED", String.format(Locale.US, "Manual exit at %,.0f ft AGL.", e.aglFt), false); }
     }
