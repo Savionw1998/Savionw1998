@@ -1,26 +1,55 @@
-# SkyDive Companion v2.1
+# SkyDive Companion v2.2
 
-Phone-first skydiving companion for Android. Designed around a pocketed Galaxy S23 Ultra with voice alerts, notifications, GPS and barometric altitude. Galaxy Watch 8 can be used as an optional notification/verification surface.
+Phone-first skydiving companion for Android (Galaxy S23 Ultra in a pocket,
+Galaxy Watch 8 as an optional verification surface). Zero dependencies:
+plain framework Java, builds with Android Studio, min SDK 26, target SDK 35.
 
-## v2.1 workflow
-1. **Start Pre-Flight** — no jump tracking yet.
-2. **Gear check** — AAD, gear inspection, landing area/pattern, phone, jump plan.
-3. **Parachute-on check** — chest strap, leg straps, helmet/chin strap, goggles, altimeter.
-4. **Watch check** — optional. The app sends a notification with a Watch action. Tap **WATCH CHECK PASSED** on the Watch if it appears; the phone records the verification.
-5. **Start Ground Tracking** — begin live GPS/barometer recording when heading under the tent / toward the aircraft.
-6. Automatic ascent, freefall, canopy and landing detection continue through the jump. Post-landing recording remains active for about 2 minutes.
+Plans that drove this version:
 
-## Altitude/barometer changes
-- Ground calibration now averages several seconds of pressure readings rather than using one instantaneous reading.
-- Pressure is low-pass filtered to reduce sensor noise.
-- AGL is calculated from the averaged ground pressure baseline.
-- Small negative AGL values are clamped to zero near the ground.
-- The live screen shows pressure in **hPa** (hectopascals), absolute pressure altitude, AGL and vertical rate.
-- The vertical-rate number is **feet per minute**, so a negative value means descending; it is not altitude.
-- The app records raw GPS and barometric data for the jump log.
+- [`docs/WIREFRAMES.md`](docs/WIREFRAMES.md) — every screen, tokens, interaction rules
+- [`docs/FUNCTIONS_PLAN.md`](docs/FUNCTIONS_PLAN.md) — root causes found in v2.1 and the function-by-function fix list
 
-### Important altitude limitation
-A phone barometer is not a certified skydiving altimeter. Rapid weather/pressure changes, HVAC, indoor pressure gradients, movement, wind and sensor noise can affect readings. The app should not replace a certified altimeter, audible, AAD or drop-zone procedures.
+## What changed from v2.1
+
+**Altitude (precise feet)**
+- Fixed the unit bug: v2.1 computed metres and displayed them as feet, so every reading was 3.28× low.
+- New `AltitudeEngine`: median spike filter → ISA hypsometric conversion → 2-state Kalman filter (altitude + vertical speed) → AGL against a median 8 s ground baseline → optional ground-temperature correction → feet.
+- Vertical rate comes from the filter state, not from differencing two 20 ms samples.
+- Slow auto re-zero while genuinely still on the ground compensates weather drift; frozen the moment the climb starts. Manual RE-ZERO button too.
+- DZ elevation (user-entered or GPS-seeded) gives MSL. GPS altitude is shown for cross-checking and feeds a 4-dot confidence indicator; it is never blended into AGL.
+- Dwell-timed `JumpStateMachine` (GROUND → AIRCRAFT → FREEFALL → CANOPY → LANDED) with correct ft/min thresholds; manual MARK EXIT override.
+- Synthetic full-jump test (`app/src/test/.../AltitudeEngineTest.java`): AGL error < 1 % in flight, < 3 ft on the ground, all phases detected.
+
+**Watch challenge notifications**
+- v2.1 sent an implicit broadcast to a manifest receiver; Android 8+ drops those silently, so the challenge never posted. The fallback path also started a foreground service that never called `startForeground()`.
+- v2.2 posts the notification directly. The **WATCH CHECK PASSED** action is added via `Notification.WearableExtender`, so it renders on the Galaxy Watch and not on the phone. Each challenge carries a nonce and expires after 90 s.
+- The app now listens for the ack and flips the card to green live, shows a countdown, checks that notifications are actually allowed (with a FIX button to the channel settings), and ships a Galaxy Wearable guide. The most common cause of "nothing on the watch" is Galaxy Wearable's *Show while phone in use* toggle being off.
+
+**Stability**
+- `registerReceiver` uses `RECEIVER_NOT_EXPORTED` (the v2.1 live screen crashed on Android 14+).
+- Foreground service starts with the location type only when permission is granted; partial wake lock while tracking; all internal broadcasts package-scoped.
+
+**UI**
+- Same dark language, tightened: stepper, hero altitude card tinted by phase, stat tiles, status pills, gradient primary button, hairline card borders, tabular numbers, disabled-until-ready buttons with a reason line.
+- New Logbook (last 20 jumps, CSV share / save to Downloads) and Settings (DZ elevation, ground temp, callouts, hard deck, watch options).
+- Proper adaptive launcher icon and monochrome notification icon.
+
+## Workflow
+1. **Start Pre-Flight** → gear checks.
+2. **Parachute on** checks + optional **watch challenge** (tap on the watch).
+3. **Ready to board**: confirm summary, enter DZ elevation / ground temp, **Start ground tracking** when walking to the aircraft. Keep the phone still for the 8 s calibration.
+4. Automatic phase detection, voice callouts (default 10,000 → 500 ft), hard deck warning, landing detection, 2 min post-landing recording, auto-save to the logbook.
 
 ## Build
-Open the `SkyDiveCompanion` folder in Android Studio, allow Gradle sync, then build/install the debug APK. The project targets SDK 35 and min SDK 26.
+Open the `SkyDiveCompanion` folder in Android Studio (Ladybug or newer), let Gradle sync, build and install the debug APK. No extra dependencies.
+
+To run the engine test without Android Studio:
+```
+javac -d /tmp/out app/src/main/java/com/savion/skydivecompanion/AltitudeEngine.java \
+      app/src/main/java/com/savion/skydivecompanion/JumpStateMachine.java \
+      app/src/test/java/com/savion/skydivecompanion/AltitudeEngineTest.java
+java -cp /tmp/out com.savion.skydivecompanion.AltitudeEngineTest
+```
+
+## Altitude limitation
+A phone barometer is not a certified skydiving altimeter. Weather changes, HVAC, a hand over the sensor port, wind and sensor noise all affect it. The certified altimeter, audible, AAD and drop-zone procedures remain primary; this app is a recording and awareness companion.
