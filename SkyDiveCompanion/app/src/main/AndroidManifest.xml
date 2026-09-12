@@ -1,0 +1,14 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+ <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+ <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+ <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+ <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+ <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+ <application android:theme="@style/AppTheme" android:label="SkyDive Companion" android:allowBackup="false" android:supportsRtl="true">
+  <activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
+  <service android:name=".DiveService" android:exported="false" android:foregroundServiceType="location"/>
+   <receiver android:name=".WatchTestReceiver" android:exported="false">
+   <intent-filter><action android:name="com.savion.skydivecompanion.WATCH_TEST"/><action android:name="com.savion.skydivecompanion.WATCH_ACK"/></intent-filter>
+  </receiver>
+ </application>
+</manifest>
