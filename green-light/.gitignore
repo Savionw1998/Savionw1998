@@ -1,0 +1,38 @@
+# --- secrets: NEVER commit ---
+# Real deployment URL + shared secret for the Google Sheet sync.
+# Copy www/sync-config.example.js -> www/sync-config.js and fill it in locally.
+www/sync-config.js
+sync-config.js
+*.keystore
+*.jks
+keystore.properties
+google-services.json
+.env
+.env.*
+
+# --- build output ---
+# The release APK bakes sync-config.js into assets/public/, so a built APK
+# carries the live secret. Don't commit builds.
+*.apk
+*.aab
+*.idsig
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/app/src/main/assets/public/
+android/app/release/
+build/
+dist/
+www/cordova.js
+www/cordova_plugins.js
+
+# --- tooling ---
+node_modules/
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+*.iml
+.capacitor/
